@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router";
-import { Banner, Page } from "@shopify/polaris";
+import { useEffect, useRef, useState } from "react";
+import { redirect, useLoaderData, useNavigate } from "react-router";
+import { Banner, Button, Page } from "@shopify/polaris";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { authenticate } from "../shopify.server";
 import {
@@ -9,7 +9,11 @@ import {
   STARTER_MONTHLY_PLAN,
   STARTER_YEARLY_PLAN,
 } from "../billing.shared";
-import { fetchShopifyPricingCatalog, syncShopifySubscription } from "../shopify-backend.server";
+import {
+  cancelShopifySubscription,
+  fetchShopifyPricingCatalog,
+  syncShopifySubscription,
+} from "../shopify-backend.server";
 
 const PLAN_LABELS = {
   lite_v2: "Starter",
@@ -84,12 +88,38 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const host = url.searchParams.get("host") || "";
   const embedded = url.searchParams.get("embedded") === "1";
+  const cancelRequested = url.searchParams.get("cancel") === "1";
   const requestQuery = url.searchParams.toString();
 
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
     isTest: SHOPIFY_BILLING_TEST_MODE,
   });
+
+  if (cancelRequested && appSubscriptions[0]) {
+    const cancelledSubscription = await billing.cancel({
+      subscriptionId: appSubscriptions[0].id,
+      isTest: SHOPIFY_BILLING_TEST_MODE,
+      prorate: true,
+    });
+
+    try {
+      await cancelShopifySubscription({
+        admin,
+        subscriptionId: cancelledSubscription?.id || appSubscriptions[0].id,
+        eventType: "subscription_cancelled",
+        eventId: `cancel:${appSubscriptions[0].id}`,
+      });
+    } catch {
+      // Keep cancellation UX simple even if backend sync fails.
+    }
+
+    const redirectParams = new URLSearchParams(url.searchParams);
+    redirectParams.delete("cancel");
+    redirectParams.delete("billing");
+    redirectParams.set("shop", session.shop);
+    throw redirect(`/app/billing?${redirectParams.toString()}`);
+  }
 
   const currentPlan = appSubscriptions[0] || null;
   const currentPlanInterval = currentPlan?.lineItems?.[0]?.plan?.pricingDetails?.interval || "";
@@ -111,10 +141,15 @@ export const loader = async ({ request }) => {
     url.searchParams.get("subscription_id") ||
     url.searchParams.get("billing_id") ||
     "";
-  const shouldClearQuery = Boolean(
-    currentPlan &&
-    (billingSuccess || chargeId),
-  );
+  console.log("[billing.page] billing page loader hit", {
+    shop: session.shop,
+    requestUrl: request.url,
+    billingSuccess,
+    chargeId,
+    planParam: url.searchParams.get("plan") || "",
+    search: url.search,
+  });
+  const verificationRequested = Boolean(billingSuccess || chargeId);
   let backendSyncStatus = "";
   let pricingCatalog = null;
 
@@ -127,8 +162,17 @@ export const loader = async ({ request }) => {
         eventId: chargeId || `subscription-active:${currentPlan.id}`,
       });
       backendSyncStatus = "success";
+      console.log("[billing.page] backend sync success from billing page", {
+        shop: session.shop,
+        subscriptionId: currentPlan.id,
+        subscriptionName: currentPlan.name,
+      });
     } catch {
       backendSyncStatus = "failed";
+      console.error("[billing.page] backend sync failed from billing page", {
+        shop: session.shop,
+        subscriptionId: currentPlan?.id || null,
+      });
     }
   }
 
@@ -137,6 +181,12 @@ export const loader = async ({ request }) => {
   } catch {
     pricingCatalog = null;
   }
+
+  const shouldClearQuery = Boolean(
+    currentPlan &&
+    verificationRequested &&
+    backendSyncStatus === "success",
+  );
 
   return {
     billingPlans: SHOPIFY_BILLING_PLANS,
@@ -149,6 +199,7 @@ export const loader = async ({ request }) => {
     embedded,
     requestQuery,
     backendSyncStatus,
+    verificationRequested,
     shouldClearQuery,
   };
 };
@@ -165,16 +216,39 @@ export default function BillingPage() {
     embedded,
     requestQuery,
     backendSyncStatus,
+    verificationRequested,
     shouldClearQuery,
   } =
     useLoaderData();
   const navigate = useNavigate();
-  const [showSuccessBanner, setShowSuccessBanner] = useState(backendSyncStatus === "success");
-  const [showWarningBanner, setShowWarningBanner] = useState(backendSyncStatus === "failed");
+  const [showSuccessBanner, setShowSuccessBanner] = useState(
+    verificationRequested ? false : backendSyncStatus === "success",
+  );
+  const [showWarningBanner, setShowWarningBanner] = useState(
+    verificationRequested ? false : backendSyncStatus === "failed",
+  );
   const [billingCycle, setBillingCycle] = useState(currentPlanCycle || "monthly");
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1440 : window.innerWidth,
   );
+  const [verificationState, setVerificationState] = useState(() => {
+    if (!verificationRequested) {
+      return "idle";
+    }
+    if (backendSyncStatus === "success") {
+      return "success";
+    }
+    return "checking";
+  });
+  const [verificationMessage, setVerificationMessage] = useState(() => {
+    if (!verificationRequested) return "";
+    if (backendSyncStatus === "success") {
+      return "Your Shopify subscription is active and synced successfully.";
+    }
+    return "We are verifying your Shopify subscription and syncing access.";
+  });
+  const pollingAttemptsRef = useRef(0);
+  const timeoutRef = useRef(null);
 
   const handleBillingCycleChange = (nextCycle) => setBillingCycle(nextCycle);
 
@@ -200,9 +274,105 @@ export default function BillingPage() {
   }, [backendSyncStatus]);
 
   useEffect(() => {
+    if (!verificationRequested) {
+      setVerificationState("idle");
+      setVerificationMessage("");
+      return;
+    }
+
+    if (backendSyncStatus === "success") {
+      setVerificationState("success");
+      setVerificationMessage("Your Shopify subscription is active and synced successfully.");
+    } else {
+      setVerificationState("checking");
+      setVerificationMessage("We are verifying your Shopify subscription and syncing access.");
+    }
+  }, [backendSyncStatus, verificationRequested]);
+
+  useEffect(() => {
     if (!shouldClearQuery) return;
     navigate(`/app/billing?${baseQuery}`, { replace: true });
   }, [baseQuery, navigate, shouldClearQuery]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (!verificationRequested) return undefined;
+    if (verificationState === "success" || verificationState === "failed" || verificationState === "pending") {
+      return undefined;
+    }
+
+    let cancelled = false;
+    pollingAttemptsRef.current = 0;
+
+    const pollStatus = async () => {
+      try {
+        const response = await fetch(`/app/billing/status?${baseQuery}`, {
+          credentials: "same-origin",
+          headers: {
+            Accept: "application/json",
+          },
+        });
+        const payload = await response.json();
+        if (cancelled) return;
+
+        if (payload.verificationState === "success") {
+          setVerificationState("success");
+          setVerificationMessage("Your Shopify subscription is active and synced successfully.");
+          setShowSuccessBanner(true);
+          setShowWarningBanner(false);
+          navigate(`/app/billing?${baseQuery}`, { replace: true });
+          return;
+        }
+
+        if (payload.verificationState === "failed") {
+          setVerificationState("failed");
+          setVerificationMessage(
+            "We could not confirm an active Shopify subscription. If you were charged, refresh once or contact support.",
+          );
+          setShowSuccessBanner(false);
+          setShowWarningBanner(true);
+          return;
+        }
+
+        if (payload.verificationState === "pending") {
+          setVerificationState("checking");
+          setVerificationMessage(
+            payload.syncError ||
+              "Shopify approved the plan, but backend verification is still finishing.",
+          );
+        }
+      } catch {
+        if (cancelled) return;
+        setVerificationMessage("We are still checking the latest Shopify billing status.");
+      }
+    };
+
+    pollStatus();
+    const intervalId = window.setInterval(() => {
+      pollingAttemptsRef.current += 1;
+      pollStatus();
+    }, 3000);
+
+    timeoutRef.current = window.setTimeout(() => {
+      if (cancelled) return;
+      setVerificationState("pending");
+      setVerificationMessage(
+        "Your payment may still be processing. Please refresh in a moment. If Shopify charged you, access should sync shortly.",
+      );
+      setShowSuccessBanner(false);
+      setShowWarningBanner(true);
+      window.clearInterval(intervalId);
+    }, 45000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [baseQuery, navigate, verificationRequested, verificationState]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -301,16 +471,25 @@ export default function BillingPage() {
       };
 
   return (
-    <Page title="Billing" backAction={{ content: "Home", onAction: () => navigate(`/app?${baseQuery}`) }}>
+    <Page
+      fullWidth
+      title="Billing"
+      backAction={{ content: "Home", onAction: () => navigate(`/app?${baseQuery}`) }}
+    >
       <div
         style={{
           minHeight: "calc(100dvh - 56px)",
           background: "#F5F5F7",
           margin: "-16px",
-          padding: "32px 20px 56px",
+          padding: "24px 0 0",
         }}
       >
-        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+        <div style={{ width: "100%", margin: 0 }}>
+        {verificationRequested && verificationState === "checking" ? (
+          <Banner title="Verifying subscription" tone="info">
+            <p>{verificationMessage}</p>
+          </Banner>
+        ) : null}
         {showSuccessBanner ? (
           <Banner
             title="Subscription activated"
@@ -322,11 +501,15 @@ export default function BillingPage() {
         ) : null}
         {showWarningBanner ? (
           <Banner
-            title="Subscription activated with sync warning"
+            title={
+              verificationState === "failed"
+                ? "Subscription verification failed"
+                : "Subscription verification pending"
+            }
             tone="warning"
             onDismiss={() => setShowWarningBanner(false)}
           >
-            <p>The Shopify plan became active, but backend sync did not complete cleanly.</p>
+            <p>{verificationMessage || "The Shopify plan became active, but backend sync did not complete cleanly."}</p>
           </Banner>
         ) : null}
         <section style={{ textAlign: "center", padding: "28px 0 20px" }}>
@@ -750,7 +933,7 @@ export default function BillingPage() {
             }}
           >
             <a
-              href={`/app/billing/cancel?${subscribeQuery}`}
+              href={`/app/billing?cancel=1&${subscribeQuery}`}
               style={{ display: "inline-block", textDecoration: "none" }}
             >
               <Button destructive>

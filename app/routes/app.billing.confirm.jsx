@@ -18,12 +18,29 @@ export const loader = async ({ request }) => {
     url.searchParams.get("billing_id") ||
     "";
 
+  console.log("[billing.confirm] confirm route hit", {
+    shop: session.shop,
+    requestUrl: request.url,
+    host,
+    embedded,
+    planKey,
+    chargeId,
+    search: url.search,
+  });
+
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
     isTest: SHOPIFY_BILLING_TEST_MODE,
   });
 
   const currentPlan = appSubscriptions[0] || null;
+  console.log("[billing.confirm] billing.check result", {
+    shop: session.shop,
+    appSubscriptionsCount: appSubscriptions.length,
+    currentPlanId: currentPlan?.id || null,
+    currentPlanName: currentPlan?.name || null,
+    currentPlanStatus: currentPlan?.status || null,
+  });
   let backendSyncStatus = "pending";
   let backendSyncError = "";
 
@@ -36,13 +53,28 @@ export const loader = async ({ request }) => {
         eventId: chargeId || `subscription-approved:${currentPlan.id}`,
       });
       backendSyncStatus = "success";
+      console.log("[billing.confirm] backend sync success", {
+        shop: session.shop,
+        subscriptionId: currentPlan.id,
+        subscriptionName: currentPlan.name,
+      });
     } catch (error) {
       backendSyncStatus = "failed";
       backendSyncError = error?.message || "Backend sync did not complete cleanly.";
+      console.error("[billing.confirm] backend sync failed", {
+        shop: session.shop,
+        subscriptionId: currentPlan?.id || null,
+        error: error?.message || String(error),
+      });
     }
   } else {
     backendSyncStatus = "missing_subscription";
     backendSyncError = "Shopify did not report an active subscription after approval.";
+    console.warn("[billing.confirm] no active subscription after approval", {
+      shop: session.shop,
+      planKey,
+      chargeId,
+    });
   }
 
   return {

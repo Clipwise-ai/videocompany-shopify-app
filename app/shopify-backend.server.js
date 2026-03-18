@@ -254,3 +254,20 @@ export async function fetchShopifyPricingCatalog() {
     method: "GET",
   });
 }
+
+export async function fetchShopifySubscriptionStatus({ companyId = null, shopDomain = "" } = {}) {
+  const params = new URLSearchParams();
+  if (companyId) {
+    params.set("company_id", companyId);
+  }
+  if (shopDomain) {
+    params.set("shop_domain", shopDomain);
+  }
+
+  const query = params.toString();
+  return sendSignedRequest(
+    `/core/api/shopify/internal/subscription-status/${query ? `?${query}` : ""}`,
+    null,
+    { method: "GET" },
+  );
+}

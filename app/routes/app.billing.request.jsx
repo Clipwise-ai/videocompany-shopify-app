@@ -1,4 +1,5 @@
 import { redirect } from "react-router";
+import { buildEmbeddedAdminAppUrl, getPublicAppUrl } from "../app-url.server";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { SHOPIFY_BILLING_PLANS } from "../billing.config.server";
 import { authenticate } from "../shopify.server";
@@ -32,15 +33,38 @@ export const loader = async ({ request }) => {
     returnParams.set("embedded", "1");
   }
 
+  const publicAppUrl = getPublicAppUrl(request);
+  const embeddedAppBaseUrl = buildEmbeddedAdminAppUrl(host);
+  const returnUrlBase = embeddedAppBaseUrl || publicAppUrl;
+  const returnUrlPath = embeddedAppBaseUrl
+    ? `app/billing?${returnParams.toString()}`
+    : `/app/billing?${returnParams.toString()}`;
   const returnUrl = new URL(
-    `/app/billing/confirm?${returnParams.toString()}`,
-    request.url,
+    returnUrlPath,
+    `${returnUrlBase}/`,
   ).toString();
+
+  console.log("[billing.request] starting Shopify billing request", {
+    shop: session.shop,
+    planKey,
+    host,
+    embedded,
+    requestUrl: request.url,
+    publicAppUrl,
+    embeddedAppBaseUrl,
+    returnUrl,
+  });
 
   await billing.request({
     plan: planKey,
     isTest: SHOPIFY_BILLING_TEST_MODE,
     returnUrl,
+  });
+
+  console.log("[billing.request] billing.request returned unexpectedly", {
+    shop: session.shop,
+    planKey,
+    fallbackRedirect: `/app/billing?${params.toString()}`,
   });
 
   return redirect(
