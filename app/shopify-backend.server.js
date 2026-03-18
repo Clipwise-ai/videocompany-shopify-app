@@ -54,7 +54,7 @@ async function parseJson(response) {
   }
 }
 
-function getSyncHeaders(body) {
+function getSyncHeaders(path, body) {
   if (!SHOPIFY_INTERNAL_SYNC_SECRET) {
     throw new Error("SHOPIFY_INTERNAL_SYNC_SECRET is not configured.");
   }
@@ -62,7 +62,7 @@ function getSyncHeaders(body) {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = crypto
     .createHmac("sha256", SHOPIFY_INTERNAL_SYNC_SECRET)
-    .update(`${timestamp}.${body}`)
+    .update(`${timestamp}.${path}.${body}`)
     .digest("hex");
 
   return {
@@ -81,7 +81,7 @@ async function sendSignedRequest(path, payload, { method = "POST" } = {}) {
   const body = payload ? JSON.stringify(payload) : "";
   const response = await fetch(`${trimmedBase}${path}`, {
     method,
-    headers: getSyncHeaders(body),
+    headers: getSyncHeaders(path, body),
     body: method === "GET" ? undefined : body,
   });
   const responsePayload = await parseJson(response);

@@ -23,6 +23,13 @@ function getWebhookStatus(payload) {
   ).toUpperCase();
 }
 
+function buildWebhookEventId({ shop, subscription, webhookSubscriptionId, webhookStatus }) {
+  const subscriptionId = webhookSubscriptionId || subscription?.id || "unknown";
+  const periodEnd = subscription?.currentPeriodEnd || "none";
+  const status = webhookStatus || subscription?.status || "UNKNOWN";
+  return `app-subscriptions-update:${shop}:${subscriptionId}:${status}:${periodEnd}`;
+}
+
 export const action = async ({ request }) => {
   const { shop, topic, admin, payload } = await authenticate.webhook(request);
 
@@ -47,9 +54,12 @@ export const action = async ({ request }) => {
         admin,
         appSubscription: matchingActiveSubscription,
         eventType: "subscription_updated",
-        eventId:
-          webhookSubscriptionId ||
-          `app-subscriptions-update:${shop}:${matchingActiveSubscription.id}`,
+        eventId: buildWebhookEventId({
+          shop,
+          subscription: matchingActiveSubscription,
+          webhookSubscriptionId,
+          webhookStatus,
+        }),
         source: "shopify_webhook",
       });
     } else {
