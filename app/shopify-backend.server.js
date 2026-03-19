@@ -79,12 +79,25 @@ async function sendSignedRequest(path, payload, { method = "POST" } = {}) {
   }
   const trimmedBase = DJANGO_BACKEND_URL.replace(/\/$/, "");
   const body = payload ? JSON.stringify(payload) : "";
+  console.log("[shopify-backend] signed request", {
+    method,
+    path,
+    url: `${trimmedBase}${path}`,
+    payload,
+  });
   const response = await fetch(`${trimmedBase}${path}`, {
     method,
     headers: getSyncHeaders(path, body),
     body: method === "GET" ? undefined : body,
   });
   const responsePayload = await parseJson(response);
+  console.log("[shopify-backend] signed response", {
+    method,
+    path,
+    status: response.status,
+    ok: response.ok,
+    responsePayload,
+  });
   if (!response.ok) {
     const error = new Error(responsePayload?.error || `Backend sync failed (${response.status})`);
     error.status = response.status;
@@ -220,6 +233,7 @@ export async function syncShopifySubscription({
 
 export async function cancelShopifySubscription({
   admin,
+  companyId = null,
   subscriptionId = null,
   eventType,
   eventId,
@@ -231,6 +245,7 @@ export async function cancelShopifySubscription({
   }
 
   return sendSignedRequest("/core/api/shopify/internal/subscription-cancel/", {
+    ...(companyId ? { company_id: companyId } : {}),
     shop: normalizeShopPayload(shop),
     billing: subscriptionId
       ? {
@@ -260,7 +275,7 @@ export async function fetchShopifySubscriptionStatus({ companyId = null, shopDom
   if (companyId) {
     params.set("company_id", companyId);
   }
-  if (shopDomain) {
+  if (!companyId && shopDomain) {
     params.set("shop_domain", shopDomain);
   }
 

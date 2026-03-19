@@ -3,17 +3,24 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import "@shopify/polaris/build/esm/styles.css";
+import { getStoredCompanyId } from "../company-id.server";
+import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const companyId =
+    String(url.searchParams.get("companyId") || "").trim() ||
+    getStoredCompanyId(request) ||
+    (await getLinkedCompanyIdForShop(session.shop));
 
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  return { apiKey: process.env.SHOPIFY_API_KEY || "", companyId };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, companyId: loaderCompanyId } = useLoaderData();
   const location = useLocation();
   const currentParams = new URLSearchParams(location.search);
   const embeddedParams = new URLSearchParams();
@@ -26,6 +33,10 @@ export default function App() {
   }
   if (currentParams.get("embedded") === "1") {
     embeddedParams.set("embedded", "1");
+  }
+  const effectiveCompanyId = currentParams.get("companyId") || loaderCompanyId || "";
+  if (effectiveCompanyId) {
+    embeddedParams.set("companyId", effectiveCompanyId);
   }
 
   const embeddedQuery = embeddedParams.toString();

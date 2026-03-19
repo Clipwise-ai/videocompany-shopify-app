@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { useLoaderData, useNavigate } from "react-router";
 import { Banner, BlockStack, Box, Button, Card, InlineStack, Page, Text } from "@shopify/polaris";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
+import { getStoredCompanyId } from "../company-id.server";
+import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { authenticate } from "../shopify.server";
 import { SHOPIFY_BILLING_PLANS, SHOPIFY_PAID_PLAN_KEYS } from "../billing.config.server";
 import { syncShopifySubscription } from "../shopify-backend.server";
@@ -11,6 +13,10 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const host = url.searchParams.get("host") || "";
   const embedded = url.searchParams.get("embedded") === "1";
+  const companyId =
+    String(url.searchParams.get("companyId") || "").trim() ||
+    getStoredCompanyId(request) ||
+    (await getLinkedCompanyIdForShop(session.shop));
   const planKey = url.searchParams.get("plan") || "";
   const chargeId =
     url.searchParams.get("charge_id") ||
@@ -48,6 +54,7 @@ export const loader = async ({ request }) => {
     try {
       await syncShopifySubscription({
         admin,
+        companyId,
         appSubscription: currentPlan,
         eventType: "subscription_approved",
         eventId: chargeId || `subscription-approved:${currentPlan.id}`,
@@ -79,6 +86,7 @@ export const loader = async ({ request }) => {
 
   return {
     sessionShop: session.shop,
+    companyId,
     host,
     embedded,
     currentPlan,
@@ -91,6 +99,7 @@ export const loader = async ({ request }) => {
 export default function BillingConfirmPage() {
   const {
     sessionShop,
+    companyId,
     host,
     embedded,
     currentPlan,
@@ -104,8 +113,8 @@ export default function BillingConfirmPage() {
     () =>
       `shop=${encodeURIComponent(sessionShop)}${host ? `&host=${encodeURIComponent(host)}` : ""}${
         embedded ? "&embedded=1" : ""
-      }`,
-    [embedded, host, sessionShop],
+      }${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ""}`,
+    [companyId, embedded, host, sessionShop],
   );
 
   const title =

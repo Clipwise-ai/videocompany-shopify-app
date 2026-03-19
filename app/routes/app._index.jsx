@@ -154,6 +154,7 @@ export default function AppHomePage() {
   const modalProductColumns = isMobileViewport ? 2 : isTabletViewport ? (viewportWidth <= 820 ? 3 : 4) : isCompactDesktopViewport ? 4 : 5;
   const selectedImage = selectedProductImages[0] || null;
   const currentParams = new URLSearchParams(location.search);
+  const [linkedCompanyId, setLinkedCompanyId] = useState(() => currentParams.get("companyId") || "");
   const embeddedParams = new URLSearchParams();
   embeddedParams.set("shop", sessionShop);
   if (currentParams.get("host")) {
@@ -161,6 +162,9 @@ export default function AppHomePage() {
   }
   if (currentParams.get("embedded") === "1") {
     embeddedParams.set("embedded", "1");
+  }
+  if (linkedCompanyId) {
+    embeddedParams.set("companyId", linkedCompanyId);
   }
   const billingHref = `/app/billing?${embeddedParams.toString()}`;
 
@@ -203,45 +207,59 @@ export default function AppHomePage() {
         const payload = event.data?.payload || {};
         const companyId = String(payload?.companyId || "").trim();
         const userId = String(payload?.userId || "").trim();
+        console.log("[app.home] received store link event", {
+          companyId,
+          userId,
+          origin: event.origin,
+        });
         if (!companyId && !userId) return;
 
         const dedupeKey = `${companyId}:${userId}:${shop?.myshopifyDomain || ""}`;
         if (storeLinkKeyRef.current === dedupeKey) return;
         storeLinkKeyRef.current = dedupeKey;
-
-        const currentSearch = new URLSearchParams(location.search);
-        const params = new URLSearchParams();
-        params.set("shop", sessionShop);
-        if (currentSearch.get("host")) {
-          params.set("host", currentSearch.get("host"));
-        }
-        if (currentSearch.get("embedded") === "1") {
-          params.set("embedded", "1");
+        if (companyId) {
+          setLinkedCompanyId(companyId);
+          const nextUrl = new URL(window.location.href);
+          nextUrl.searchParams.set("companyId", companyId);
+          window.history.replaceState({}, "", nextUrl.toString());
         }
 
         try {
-          const sessionToken = await window.shopify?.sessionToken?.get?.();
-          const response = await fetch(`/app/store-link?${params.toString()}`, {
+          const response = await fetch("/app/store-link", {
             method: "POST",
             credentials: "same-origin",
             headers: {
               "Content-Type": "application/json",
-              ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+              Accept: "application/json",
             },
             body: JSON.stringify({ companyId, userId }),
           });
-          if (!response.ok) {
-            storeLinkKeyRef.current = "";
+          let responsePayload = null;
+          try {
+            responsePayload = await response.json();
+          } catch {
+            responsePayload = null;
           }
-        } catch {
-          storeLinkKeyRef.current = "";
+          console.log("[app.home] store link response", {
+            companyId,
+            userId,
+            status: response.status,
+            ok: response.ok,
+            responsePayload,
+          });
+        } catch (error) {
+          console.error("[app.home] failed to persist company link", {
+            companyId,
+            userId,
+            error: error?.message || String(error),
+          });
         }
       }
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [frontendUrl, location.search, sessionShop, shop?.myshopifyDomain]);
+  }, [frontendUrl, location.search, shop?.myshopifyDomain]);
 
   useEffect(() => {
     if (!isIframeReady || !iframeRef.current?.contentWindow || !iframeBootstrapPayload) return;

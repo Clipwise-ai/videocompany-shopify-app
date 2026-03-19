@@ -1,7 +1,8 @@
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { SHOPIFY_PAID_PLAN_KEYS } from "../billing.config.server";
+import { getStoredCompanyId } from "../company-id.server";
+import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import {
-  fetchShopIdentity,
   fetchShopifySubscriptionStatus,
   syncShopifySubscription,
 } from "../shopify-backend.server";
@@ -13,7 +14,17 @@ function isBackendSubscriptionActive(subscription) {
 }
 
 export const loader = async ({ request }) => {
-  const { billing, admin } = await authenticate.admin(request);
+  const { billing, admin, session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const companyId =
+    String(url.searchParams.get("companyId") || "").trim() ||
+    getStoredCompanyId(request) ||
+    (await getLinkedCompanyIdForShop(session.shop));
+  console.log("[billing.status] loader hit", {
+    requestUrl: request.url,
+    shop: session.shop,
+    companyId,
+  });
 
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
@@ -21,7 +32,6 @@ export const loader = async ({ request }) => {
   });
 
   const currentPlan = appSubscriptions[0] || null;
-  const shop = await fetchShopIdentity(admin);
 
   let backendStatus = null;
   let syncStatus = currentPlan ? "skipped" : "no_active_subscription";
@@ -31,6 +41,7 @@ export const loader = async ({ request }) => {
     try {
       await syncShopifySubscription({
         admin,
+        companyId,
         appSubscription: currentPlan,
         eventType: "subscription_verify_poll",
         eventId: `verify-poll:${currentPlan.id}`,
@@ -39,18 +50,30 @@ export const loader = async ({ request }) => {
     } catch (error) {
       syncStatus = "failed";
       syncError = error?.message || "Backend sync failed.";
+      console.error("[billing.status] sync failed", {
+        companyId,
+        error: error?.message || null,
+        status: error?.status || null,
+        payload: error?.payload || null,
+      });
     }
   }
 
   try {
     backendStatus = await fetchShopifySubscriptionStatus({
-      shopDomain: shop?.myshopifyDomain || "",
+      companyId,
     });
   } catch (error) {
     backendStatus = null;
     if (!syncError) {
       syncError = error?.message || "Could not fetch backend subscription status.";
     }
+    console.error("[billing.status] status check failed", {
+      companyId,
+      error: error?.message || null,
+      status: error?.status || null,
+      payload: error?.payload || null,
+    });
   }
 
   const backendSubscription = backendStatus?.subscription || null;

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { redirect, useLoaderData, useNavigate } from "react-router";
 import { Banner, Button, Page } from "@shopify/polaris";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
+import { getStoredCompanyId } from "../company-id.server";
+import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { authenticate } from "../shopify.server";
 import {
   CREATOR_MONTHLY_PLAN,
@@ -88,6 +90,10 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const host = url.searchParams.get("host") || "";
   const embedded = url.searchParams.get("embedded") === "1";
+  const companyId =
+    String(url.searchParams.get("companyId") || "").trim() ||
+    getStoredCompanyId(request) ||
+    (await getLinkedCompanyIdForShop(session.shop));
   const cancelRequested = url.searchParams.get("cancel") === "1";
   const requestQuery = url.searchParams.toString();
 
@@ -106,6 +112,7 @@ export const loader = async ({ request }) => {
     try {
       await cancelShopifySubscription({
         admin,
+        companyId,
         subscriptionId: cancelledSubscription?.id || appSubscriptions[0].id,
         eventType: "subscription_cancelled",
         eventId: `cancel:${appSubscriptions[0].id}`,
@@ -157,6 +164,7 @@ export const loader = async ({ request }) => {
     try {
       await syncShopifySubscription({
         admin,
+        companyId,
         appSubscription: currentPlan,
         eventType: billingSuccess ? "subscription_approved" : "subscription_checked",
         eventId: chargeId || `subscription-active:${currentPlan.id}`,
@@ -167,11 +175,15 @@ export const loader = async ({ request }) => {
         subscriptionId: currentPlan.id,
         subscriptionName: currentPlan.name,
       });
-    } catch {
+    } catch (error) {
       backendSyncStatus = "failed";
       console.error("[billing.page] backend sync failed from billing page", {
         shop: session.shop,
         subscriptionId: currentPlan?.id || null,
+        companyId,
+        error: error?.message || null,
+        status: error?.status || null,
+        payload: error?.payload || null,
       });
     }
   }
@@ -195,6 +207,7 @@ export const loader = async ({ request }) => {
     currentPlanKey,
     currentPlanCycle,
     sessionShop: session.shop,
+    companyId,
     host,
     embedded,
     requestQuery,
@@ -212,6 +225,7 @@ export default function BillingPage() {
     billingPlans,
     pricingCatalog,
     sessionShop,
+    companyId,
     host,
     embedded,
     requestQuery,
@@ -254,7 +268,7 @@ export default function BillingPage() {
 
   const baseQuery = `shop=${encodeURIComponent(sessionShop)}${host ? `&host=${encodeURIComponent(host)}` : ""}${
     embedded ? "&embedded=1" : ""
-  }`;
+  }${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ""}`;
   const subscribeQuery = (() => {
     const params = new URLSearchParams(requestQuery);
     params.set("shop", sessionShop);

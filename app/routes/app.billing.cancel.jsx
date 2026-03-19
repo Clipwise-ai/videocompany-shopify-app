@@ -1,6 +1,8 @@
 import { redirect } from "react-router";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { SHOPIFY_PAID_PLAN_KEYS } from "../billing.config.server";
+import { getStoredCompanyId } from "../company-id.server";
+import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { cancelShopifySubscription } from "../shopify-backend.server";
 import { authenticate } from "../shopify.server";
 
@@ -8,6 +10,10 @@ export const loader = async ({ request }) => {
   const { admin, billing, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const params = new URLSearchParams(url.searchParams);
+  const companyId =
+    String(url.searchParams.get("companyId") || "").trim() ||
+    getStoredCompanyId(request) ||
+    (await getLinkedCompanyIdForShop(session.shop));
 
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
@@ -24,6 +30,7 @@ export const loader = async ({ request }) => {
     try {
       await cancelShopifySubscription({
         admin,
+        companyId,
         subscriptionId: cancelledSubscription?.id || appSubscriptions[0].id,
         eventType: "subscription_cancelled",
         eventId: `cancel:${appSubscriptions[0].id}`,
