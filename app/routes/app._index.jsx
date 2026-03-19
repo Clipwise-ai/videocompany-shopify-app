@@ -207,11 +207,6 @@ export default function AppHomePage() {
         const payload = event.data?.payload || {};
         const companyId = String(payload?.companyId || "").trim();
         const userId = String(payload?.userId || "").trim();
-        console.log("[app.home] received store link event", {
-          companyId,
-          userId,
-          origin: event.origin,
-        });
         if (!companyId && !userId) return;
 
         const dedupeKey = `${companyId}:${userId}:${shop?.myshopifyDomain || ""}`;
@@ -225,7 +220,7 @@ export default function AppHomePage() {
         }
 
         try {
-          const response = await fetch("/app/store-link", {
+          await fetch("/app/store-link", {
             method: "POST",
             credentials: "same-origin",
             headers: {
@@ -234,26 +229,7 @@ export default function AppHomePage() {
             },
             body: JSON.stringify({ companyId, userId }),
           });
-          let responsePayload = null;
-          try {
-            responsePayload = await response.json();
-          } catch {
-            responsePayload = null;
-          }
-          console.log("[app.home] store link response", {
-            companyId,
-            userId,
-            status: response.status,
-            ok: response.ok,
-            responsePayload,
-          });
-        } catch (error) {
-          console.error("[app.home] failed to persist company link", {
-            companyId,
-            userId,
-            error: error?.message || String(error),
-          });
-        }
+        } catch {}
       }
     };
 

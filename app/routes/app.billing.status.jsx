@@ -20,11 +20,6 @@ export const loader = async ({ request }) => {
     String(url.searchParams.get("companyId") || "").trim() ||
     getStoredCompanyId(request) ||
     (await getLinkedCompanyIdForShop(session.shop));
-  console.log("[billing.status] loader hit", {
-    requestUrl: request.url,
-    shop: session.shop,
-    companyId,
-  });
 
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
@@ -50,12 +45,6 @@ export const loader = async ({ request }) => {
     } catch (error) {
       syncStatus = "failed";
       syncError = error?.message || "Backend sync failed.";
-      console.error("[billing.status] sync failed", {
-        companyId,
-        error: error?.message || null,
-        status: error?.status || null,
-        payload: error?.payload || null,
-      });
     }
   }
 
@@ -68,12 +57,6 @@ export const loader = async ({ request }) => {
     if (!syncError) {
       syncError = error?.message || "Could not fetch backend subscription status.";
     }
-    console.error("[billing.status] status check failed", {
-      companyId,
-      error: error?.message || null,
-      status: error?.status || null,
-      payload: error?.payload || null,
-    });
   }
 
   const backendSubscription = backendStatus?.subscription || null;

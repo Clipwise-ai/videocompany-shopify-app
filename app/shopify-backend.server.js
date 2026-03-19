@@ -79,25 +79,12 @@ async function sendSignedRequest(path, payload, { method = "POST" } = {}) {
   }
   const trimmedBase = DJANGO_BACKEND_URL.replace(/\/$/, "");
   const body = payload ? JSON.stringify(payload) : "";
-  console.log("[shopify-backend] signed request", {
-    method,
-    path,
-    url: `${trimmedBase}${path}`,
-    payload,
-  });
   const response = await fetch(`${trimmedBase}${path}`, {
     method,
     headers: getSyncHeaders(path, body),
     body: method === "GET" ? undefined : body,
   });
   const responsePayload = await parseJson(response);
-  console.log("[shopify-backend] signed response", {
-    method,
-    path,
-    status: response.status,
-    ok: response.ok,
-    responsePayload,
-  });
   if (!response.ok) {
     const error = new Error(responsePayload?.error || `Backend sync failed (${response.status})`);
     error.status = response.status;

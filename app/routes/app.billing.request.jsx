@@ -41,18 +41,6 @@ export const loader = async ({ request }) => {
     `${returnUrlBase}/`,
   ).toString();
 
-  console.log("[billing.request] starting Shopify billing request", {
-    shop: session.shop,
-    planKey,
-    host,
-    embedded,
-    requestUrl: request.url,
-    publicAppUrl,
-    embeddedAppBaseUrl,
-    returnUrl,
-    returnUrlLength: returnUrl.length,
-  });
-
   const { appSubscriptions } = await billing.check({
     plans: SHOPIFY_PAID_PLAN_KEYS,
     isTest: SHOPIFY_BILLING_TEST_MODE,
@@ -67,24 +55,7 @@ export const loader = async ({ request }) => {
       String(currentPlanInterval || "").toUpperCase() === String(requestedInterval || "").toUpperCase(),
   );
 
-  console.log("[billing.request] active subscription snapshot", {
-    shop: session.shop,
-    requestedPlanKey: planKey,
-    requestedPlanLabel: requestedPlan?.label || null,
-    requestedInterval,
-    currentPlanId: currentPlan?.id || null,
-    currentPlanName: currentPlan?.name || null,
-    currentPlanStatus: currentPlan?.status || null,
-    currentPlanInterval,
-    isSamePlanActive,
-  });
-
   if (isSamePlanActive) {
-    console.log("[billing.request] requested plan already active, redirecting back to billing", {
-      shop: session.shop,
-      planKey,
-      currentPlanId: currentPlan?.id || null,
-    });
     params.set("shop", session.shop);
     if (companyId) {
       params.set("companyId", companyId);
@@ -99,27 +70,8 @@ export const loader = async ({ request }) => {
       returnUrl,
     });
   } catch (error) {
-    console.error("[billing.request] billing.request failed", {
-      shop: session.shop,
-      planKey,
-      companyId,
-      returnUrl,
-      currentPlanId: currentPlan?.id || null,
-      currentPlanName: currentPlan?.name || null,
-      currentPlanStatus: currentPlan?.status || null,
-      currentPlanInterval,
-      message: error?.message || String(error),
-      cause: error?.cause || null,
-      stack: error?.stack || null,
-    });
     throw error;
   }
-
-  console.log("[billing.request] billing.request returned unexpectedly", {
-    shop: session.shop,
-    planKey,
-    fallbackRedirect: `/app/billing?${params.toString()}`,
-  });
 
   return redirect(
     `/app/billing?${params.toString()}`,

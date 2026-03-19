@@ -8,23 +8,11 @@ export const action = async ({ request }) => {
   const companyId = String(payload?.companyId || "").trim();
   const userId = String(payload?.userId || "").trim();
 
-  console.log("[store-link] action hit", {
-    shop: session.shop,
-    companyId,
-    userId,
-  });
-
   if (!companyId && !userId) {
     return Response.json({ error: "companyId or userId is required." }, { status: 400 });
   }
 
   await persistShopLink({
-    shop: session.shop,
-    companyId,
-    userId,
-  });
-
-  console.log("[store-link] persisted", {
     shop: session.shop,
     companyId,
     userId,
