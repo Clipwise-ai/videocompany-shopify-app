@@ -19,6 +19,7 @@ import {
 } from "../shopify-backend.server";
 
 const SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY = "clipwise_shopify_iframe_auth_state";
+const SHOPIFY_IFRAME_AUTH_STATE_UPDATED_EVENT = "clipwise:shopify-auth-state-updated";
 
 const PLAN_LABELS = {
   lite_v2: "Starter",
@@ -487,7 +488,11 @@ export default function BillingPage() {
 
     syncAuthState();
     window.addEventListener("focus", syncAuthState);
-    return () => window.removeEventListener("focus", syncAuthState);
+    window.addEventListener(SHOPIFY_IFRAME_AUTH_STATE_UPDATED_EVENT, syncAuthState);
+    return () => {
+      window.removeEventListener("focus", syncAuthState);
+      window.removeEventListener(SHOPIFY_IFRAME_AUTH_STATE_UPDATED_EVENT, syncAuthState);
+    };
   }, []);
 
   useEffect(() => {

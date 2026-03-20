@@ -1,4 +1,5 @@
 import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
+import { useEffect } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -7,6 +8,9 @@ import { getStoredCompanyId } from "../company-id.server";
 import { createStoredShopCookie } from "../shop-cookie.server";
 import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { authenticate } from "../shopify.server";
+
+const SHOPIFY_IFRAME_AUTH_STATE_EVENT = "clipwise:auth-state";
+const SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY = "clipwise_shopify_iframe_auth_state";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -50,6 +54,30 @@ export default function App() {
   const embeddedQuery = embeddedParams.toString();
   const homeHref = embeddedQuery ? `/app?${embeddedQuery}` : "/app";
   const billingHref = embeddedQuery ? `/app/billing?${embeddedQuery}` : "/app/billing";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handleMessage = (event) => {
+      if (event?.data?.type !== SHOPIFY_IFRAME_AUTH_STATE_EVENT) return;
+
+      try {
+        window.sessionStorage.setItem(
+          SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY,
+          JSON.stringify({
+            isAuthenticated: Boolean(event.data?.payload?.isAuthenticated),
+            updatedAt: Date.now(),
+          }),
+        );
+        window.dispatchEvent(new CustomEvent("clipwise:shopify-auth-state-updated"));
+      } catch {
+        // Ignore storage issues and keep shell navigation working.
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   return (
     <AppProvider embedded apiKey={apiKey}>

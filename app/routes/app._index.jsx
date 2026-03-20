@@ -6,8 +6,6 @@ import { authenticate } from "../shopify.server";
 const VIDEO_COMPANY_FRONTEND_URL = process.env.VITE_VIDEO_COMPANY_FRONTEND_URL || "http://localhost:3000";
 const SHOPIFY_IFRAME_BOOTSTRAP_EVENT = "clipwise:shopify-bootstrap";
 const SHOPIFY_IFRAME_READY_EVENT = "clipwise:shopify-ready";
-const SHOPIFY_IFRAME_AUTH_STATE_EVENT = "clipwise:auth-state";
-const SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY = "clipwise_shopify_iframe_auth_state";
 
 const normalizeProduct = (product) => {
   const images = Array.isArray(product?.images?.nodes)
@@ -184,24 +182,6 @@ export default function AppHomePage() {
 
       if (event.data?.type === SHOPIFY_IFRAME_READY_EVENT) {
         setIsIframeReady(true);
-      }
-
-      if (event.data?.type === SHOPIFY_IFRAME_AUTH_STATE_EVENT && typeof window !== "undefined") {
-        try {
-          console.log("[shopify-auth-debug][shell] received iframe auth state", {
-            origin: event.origin,
-            payload: event.data?.payload || null,
-          });
-          window.sessionStorage.setItem(
-            SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY,
-            JSON.stringify({
-              isAuthenticated: Boolean(event.data?.payload?.isAuthenticated),
-              updatedAt: Date.now(),
-            }),
-          );
-        } catch {
-          // Ignore storage issues and keep the shell usable.
-        }
       }
     };
 
