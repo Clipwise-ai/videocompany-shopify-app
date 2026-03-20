@@ -1,4 +1,5 @@
 import { redirect } from "react-router";
+import { createPendingBillingAttemptCookie } from "../billing-attempt.server";
 import { buildEmbeddedAdminAppUrl, getPublicAppUrl } from "../app-url.server";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { SHOPIFY_BILLING_PLANS, SHOPIFY_PAID_PLAN_KEYS } from "../billing.config.server";
@@ -23,6 +24,11 @@ export const loader = async ({ request }) => {
     throw new Response("Invalid Shopify plan.", { status: 400 });
   }
 
+  if (!companyId) {
+    params.set("shop", session.shop);
+    return redirect(`/app/billing?${params.toString()}`);
+  }
+
   params.set("shop", session.shop);
   params.delete("billing");
 
@@ -31,7 +37,6 @@ export const loader = async ({ request }) => {
   if (planKey) {
     returnParams.set("plan", planKey);
   }
-
   const publicAppUrl = getPublicAppUrl(request);
   const embeddedAppBaseUrl = buildEmbeddedAdminAppUrl(host);
   const returnUrlBase = publicAppUrl;
@@ -70,6 +75,22 @@ export const loader = async ({ request }) => {
       returnUrl,
     });
   } catch (error) {
+    if (error instanceof Response) {
+      const headers = new Headers(error.headers);
+      headers.append(
+        "Set-Cookie",
+        createPendingBillingAttemptCookie({
+          shop: session.shop,
+          companyId,
+          planKey,
+        }),
+      );
+      return new Response(error.body, {
+        status: error.status,
+        statusText: error.statusText,
+        headers,
+      });
+    }
     throw error;
   }
 

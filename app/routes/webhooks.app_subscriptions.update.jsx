@@ -30,6 +30,14 @@ function buildWebhookEventId({ shop, subscription, webhookSubscriptionId, webhoo
   return `app-subscriptions-update:${shop}:${subscriptionId}:${status}:${periodEnd}`;
 }
 
+function getSyncEventType(webhookStatus) {
+  const normalized = String(webhookStatus || "").toUpperCase();
+  if (normalized === "ACTIVE" || normalized === "ACCEPTED") {
+    return "subscription_approved";
+  }
+  return "subscription_updated";
+}
+
 export const action = async ({ request }) => {
   const { shop, topic, admin, payload } = await authenticate.webhook(request);
 
@@ -53,7 +61,7 @@ export const action = async ({ request }) => {
       await syncShopifySubscription({
         admin,
         appSubscription: matchingActiveSubscription,
-        eventType: "subscription_updated",
+        eventType: getSyncEventType(webhookStatus || matchingActiveSubscription?.status),
         eventId: buildWebhookEventId({
           shop,
           subscription: matchingActiveSubscription,

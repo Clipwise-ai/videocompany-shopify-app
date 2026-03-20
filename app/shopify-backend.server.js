@@ -115,6 +115,12 @@ function normalizeShopPayload(shop) {
   };
 }
 
+function resolveShopifyCustomerId(shop) {
+  return String(shop?.myshopifyDomain || shop?.domain || "")
+    .trim()
+    .toLowerCase() || null;
+}
+
 function normalizeBillingStatus(status) {
   return String(status || "").toUpperCase() || "PENDING";
 }
@@ -161,21 +167,6 @@ function resolveInterval(appSubscription) {
   return lineItems[0]?.plan?.pricingDetails?.interval || "EVERY_30_DAYS";
 }
 
-export async function syncShopifyStoreConnection({ admin, companyId = null, userId = null, installStatus = "installed", meta = {} }) {
-  const shop = await fetchShopIdentity(admin);
-  if (!shop) {
-    throw new Error("Could not load Shopify shop identity.");
-  }
-
-  return sendSignedRequest("/core/api/shopify/internal/store-sync/", {
-    ...(companyId ? { company_id: companyId } : {}),
-    ...(userId ? { user_id: userId } : {}),
-    shop: normalizeShopPayload(shop),
-    install_status: installStatus,
-    meta,
-  });
-}
-
 export async function syncShopifySubscription({
   admin,
   companyId = null,
@@ -192,8 +183,11 @@ export async function syncShopifySubscription({
     throw new Error("Missing Shopify app subscription ID.");
   }
 
+  const customerId = resolveShopifyCustomerId(shop);
+
   return sendSignedRequest("/core/api/shopify/internal/subscription-sync/", {
     ...(companyId ? { company_id: companyId } : {}),
+    ...(customerId ? { customer_id: customerId } : {}),
     shop: normalizeShopPayload(shop),
     billing: {
       provider: "shopify",
@@ -231,8 +225,11 @@ export async function cancelShopifySubscription({
     throw new Error("Could not load Shopify shop identity.");
   }
 
+  const customerId = resolveShopifyCustomerId(shop);
+
   return sendSignedRequest("/core/api/shopify/internal/subscription-cancel/", {
     ...(companyId ? { company_id: companyId } : {}),
+    ...(customerId ? { customer_id: customerId } : {}),
     shop: normalizeShopPayload(shop),
     billing: subscriptionId
       ? {
@@ -257,13 +254,13 @@ export async function fetchShopifyPricingCatalog() {
   });
 }
 
-export async function fetchShopifySubscriptionStatus({ companyId = null, shopDomain = "" } = {}) {
+export async function fetchShopifySubscriptionStatus({ companyId = null, customerId = "" } = {}) {
   const params = new URLSearchParams();
   if (companyId) {
     params.set("company_id", companyId);
   }
-  if (!companyId && shopDomain) {
-    params.set("shop_domain", shopDomain);
+  if (!companyId && customerId) {
+    params.set("customer_id", customerId);
   }
 
   const query = params.toString();

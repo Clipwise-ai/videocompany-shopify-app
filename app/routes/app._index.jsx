@@ -6,7 +6,8 @@ import { authenticate } from "../shopify.server";
 const VIDEO_COMPANY_FRONTEND_URL = process.env.VITE_VIDEO_COMPANY_FRONTEND_URL || "http://localhost:3000";
 const SHOPIFY_IFRAME_BOOTSTRAP_EVENT = "clipwise:shopify-bootstrap";
 const SHOPIFY_IFRAME_READY_EVENT = "clipwise:shopify-ready";
-const SHOPIFY_STORE_LINK_EVENT = "clipwise:shopify-store-link";
+const SHOPIFY_IFRAME_AUTH_STATE_EVENT = "clipwise:auth-state";
+const SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY = "clipwise_shopify_iframe_auth_state";
 
 const normalizeProduct = (product) => {
   const images = Array.isArray(product?.images?.nodes)
@@ -102,15 +103,13 @@ export const loader = async ({ request }) => {
     products,
     shop: shopJson?.data?.shop || null,
     sessionShop: session.shop,
-    activePlanName: activeSubscription?.name || "",
   };
 };
 
 export default function AppHomePage() {
-  const { appOrigin, frontendUrl, products, shop, sessionShop, activePlanName } = useLoaderData();
+  const { appOrigin, frontendUrl, products, shop, sessionShop } = useLoaderData();
   const location = useLocation();
   const iframeRef = useRef(null);
-  const storeLinkKeyRef = useRef("");
   const [isIframeReady, setIsIframeReady] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1440 : window.innerWidth,
@@ -153,21 +152,6 @@ export default function AppHomePage() {
   const isCompactDesktopViewport = viewportWidth <= 1280;
   const modalProductColumns = isMobileViewport ? 2 : isTabletViewport ? (viewportWidth <= 820 ? 3 : 4) : isCompactDesktopViewport ? 4 : 5;
   const selectedImage = selectedProductImages[0] || null;
-  const currentParams = new URLSearchParams(location.search);
-  const [linkedCompanyId, setLinkedCompanyId] = useState(() => currentParams.get("companyId") || "");
-  const embeddedParams = new URLSearchParams();
-  embeddedParams.set("shop", sessionShop);
-  if (currentParams.get("host")) {
-    embeddedParams.set("host", currentParams.get("host"));
-  }
-  if (currentParams.get("embedded") === "1") {
-    embeddedParams.set("embedded", "1");
-  }
-  if (linkedCompanyId) {
-    embeddedParams.set("companyId", linkedCompanyId);
-  }
-  const billingHref = `/app/billing?${embeddedParams.toString()}`;
-
   const iframeSelectedProduct = useMemo(
     () => buildSelectedProductPayload(selectedProduct, selectedImage),
     [selectedImage, selectedProduct],
@@ -195,47 +179,35 @@ export default function AppHomePage() {
   useEffect(() => {
     const expectedOrigin = new URL(frontendUrl).origin;
 
-    const handleMessage = async (event) => {
+    const handleMessage = (event) => {
       if (event.origin !== expectedOrigin) return;
 
       if (event.data?.type === SHOPIFY_IFRAME_READY_EVENT) {
         setIsIframeReady(true);
-        return;
       }
 
-      if (event.data?.type === SHOPIFY_STORE_LINK_EVENT) {
-        const payload = event.data?.payload || {};
-        const companyId = String(payload?.companyId || "").trim();
-        const userId = String(payload?.userId || "").trim();
-        if (!companyId && !userId) return;
-
-        const dedupeKey = `${companyId}:${userId}:${shop?.myshopifyDomain || ""}`;
-        if (storeLinkKeyRef.current === dedupeKey) return;
-        storeLinkKeyRef.current = dedupeKey;
-        if (companyId) {
-          setLinkedCompanyId(companyId);
-          const nextUrl = new URL(window.location.href);
-          nextUrl.searchParams.set("companyId", companyId);
-          window.history.replaceState({}, "", nextUrl.toString());
-        }
-
+      if (event.data?.type === SHOPIFY_IFRAME_AUTH_STATE_EVENT && typeof window !== "undefined") {
         try {
-          await fetch("/app/store-link", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify({ companyId, userId }),
+          console.log("[shopify-auth-debug][shell] received iframe auth state", {
+            origin: event.origin,
+            payload: event.data?.payload || null,
           });
-        } catch {}
+          window.sessionStorage.setItem(
+            SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY,
+            JSON.stringify({
+              isAuthenticated: Boolean(event.data?.payload?.isAuthenticated),
+              updatedAt: Date.now(),
+            }),
+          );
+        } catch {
+          // Ignore storage issues and keep the shell usable.
+        }
       }
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [frontendUrl, location.search, shop?.myshopifyDomain]);
+  }, [frontendUrl]);
 
   useEffect(() => {
     if (!isIframeReady || !iframeRef.current?.contentWindow || !iframeBootstrapPayload) return;
@@ -314,25 +286,8 @@ export default function AppHomePage() {
           boxShadow: "0 1px 2px rgba(15, 23, 42, 0.03)",
         }}
       >
-        <div style={{ marginBottom: "15px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ marginBottom: "15px", display: "flex", alignItems: "center" }}>
           <div style={{ fontSize: 16, fontWeight: 600 }}>Select products to create creative content</div>
-          <a href={billingHref} style={{ textDecoration: "none" }}>
-            <button
-              type="button"
-              style={{
-                border: "none",
-                background: "#111827",
-                color: "#fff",
-                borderRadius: 10,
-                padding: "8px 14px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              {activePlanName || "Billing"}
-            </button>
-          </a>
         </div>
 
         <div className="vc-scroll-hide" style={{ overflowX: "auto" }}>

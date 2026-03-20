@@ -51,6 +51,7 @@ export const loader = async ({ request }) => {
   try {
     backendStatus = await fetchShopifySubscriptionStatus({
       companyId,
+      customerId: session.shop,
     });
   } catch (error) {
     backendStatus = null;

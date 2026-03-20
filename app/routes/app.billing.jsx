@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { redirect, useLoaderData, useNavigate } from "react-router";
-import { Banner, Button, Page } from "@shopify/polaris";
+import { Page } from "@shopify/polaris";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { getStoredCompanyId } from "../company-id.server";
 import { getLinkedCompanyIdForShop } from "../shop-link.server";
@@ -13,9 +13,12 @@ import {
 } from "../billing.shared";
 import {
   cancelShopifySubscription,
+  fetchShopifySubscriptionStatus,
   fetchShopifyPricingCatalog,
   syncShopifySubscription,
 } from "../shopify-backend.server";
+
+const SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY = "clipwise_shopify_iframe_auth_state";
 
 const PLAN_LABELS = {
   lite_v2: "Starter",
@@ -34,6 +37,8 @@ function normalizePlanKey(value) {
 }
 
 function toNumber(value) {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -159,6 +164,7 @@ export const loader = async ({ request }) => {
   const verificationRequested = Boolean(billingSuccess || chargeId);
   let backendSyncStatus = "";
   let pricingCatalog = null;
+  let backendStatus = null;
 
   if (currentPlan) {
     try {
@@ -194,6 +200,33 @@ export const loader = async ({ request }) => {
     pricingCatalog = null;
   }
 
+  try {
+    backendStatus = await fetchShopifySubscriptionStatus({
+      companyId,
+      customerId: session.shop,
+    });
+  } catch {
+    backendStatus = null;
+  }
+
+  const backendSubscription = backendStatus?.subscription || null;
+  const backendProducts = Object.values(pricingCatalog?.products || {});
+  const backendDisplayPlan = backendProducts.find(
+    (product) => String(product?.id || "") === String(backendSubscription?.plan_id || ""),
+  ) || null;
+  const backendDisplayCycle = String(backendSubscription?.billing_cycle || "").toLowerCase().includes("year")
+    ? "yearly"
+    : "monthly";
+  const backendDisplayPlanKey = backendDisplayPlan
+    ? (
+        backendDisplayCycle === "yearly"
+          ? backendDisplayPlan.shopify_plan_key_yearly
+          : backendDisplayPlan.shopify_plan_key_monthly
+      ) || ""
+    : "";
+  const displayCurrentPlanKey = backendDisplayPlanKey || currentPlanKey;
+  const displayCurrentPlanCycle = backendDisplayPlanKey ? backendDisplayCycle : currentPlanCycle;
+
   const shouldClearQuery = Boolean(
     currentPlan &&
     verificationRequested &&
@@ -206,6 +239,9 @@ export const loader = async ({ request }) => {
     currentPlan,
     currentPlanKey,
     currentPlanCycle,
+    displayCurrentPlanKey,
+    displayCurrentPlanCycle,
+    backendSubscription,
     sessionShop: session.shop,
     companyId,
     host,
@@ -214,6 +250,7 @@ export const loader = async ({ request }) => {
     backendSyncStatus,
     verificationRequested,
     shouldClearQuery,
+    hasLinkedCompany: Boolean(companyId),
   };
 };
 
@@ -222,8 +259,11 @@ export default function BillingPage() {
     currentPlan,
     currentPlanKey,
     currentPlanCycle,
+    displayCurrentPlanKey,
+    displayCurrentPlanCycle,
     billingPlans,
     pricingCatalog,
+    backendSubscription,
     sessionShop,
     companyId,
     host,
@@ -232,31 +272,52 @@ export default function BillingPage() {
     backendSyncStatus,
     verificationRequested,
     shouldClearQuery,
+    hasLinkedCompany,
   } =
     useLoaderData();
   const navigate = useNavigate();
+  const hasBackendRecognizedPlan = Boolean(backendSubscription && displayCurrentPlanKey);
   const [showSuccessBanner, setShowSuccessBanner] = useState(
-    verificationRequested ? false : backendSyncStatus === "success",
+    false,
   );
   const [showWarningBanner, setShowWarningBanner] = useState(
-    verificationRequested ? false : backendSyncStatus === "failed",
+    false,
   );
-  const [billingCycle, setBillingCycle] = useState(currentPlanCycle || "monthly");
+  const [billingCycle, setBillingCycle] = useState(displayCurrentPlanCycle || currentPlanCycle || "monthly");
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1440 : window.innerWidth,
   );
+  const [hasAuthenticatedIframeSession, setHasAuthenticatedIframeSession] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const raw = window.sessionStorage.getItem(SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY);
+      console.log("[shopify-auth-debug][billing] initial auth-state read", { raw });
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return Boolean(parsed?.isAuthenticated);
+    } catch {
+      return false;
+    }
+  });
+  const linkedAndAuthenticated = hasLinkedCompany && hasAuthenticatedIframeSession;
   const [verificationState, setVerificationState] = useState(() => {
     if (!verificationRequested) {
       return "idle";
     }
-    if (backendSyncStatus === "success") {
+    if (!hasLinkedCompany || !hasAuthenticatedIframeSession) {
+      return "pending";
+    }
+    if (backendSyncStatus === "success" || hasBackendRecognizedPlan) {
       return "success";
     }
     return "checking";
   });
   const [verificationMessage, setVerificationMessage] = useState(() => {
     if (!verificationRequested) return "";
-    if (backendSyncStatus === "success") {
+    if (!hasLinkedCompany || !hasAuthenticatedIframeSession) {
+      return "Your Shopify billing exists, but there is no active Clipwise iframe login for this store.";
+    }
+    if (backendSyncStatus === "success" || hasBackendRecognizedPlan) {
       return "Your Shopify subscription is active and synced successfully.";
     }
     return "We are verifying your Shopify subscription and syncing access.";
@@ -281,11 +342,23 @@ export default function BillingPage() {
     params.delete("billing");
     return params.toString();
   })();
+  const showLinkedAccountGate = !hasLinkedCompany || !hasAuthenticatedIframeSession;
 
   useEffect(() => {
-    setShowSuccessBanner(backendSyncStatus === "success");
-    setShowWarningBanner(backendSyncStatus === "failed");
-  }, [backendSyncStatus]);
+    setShowSuccessBanner(linkedAndAuthenticated && (backendSyncStatus === "success" || hasBackendRecognizedPlan));
+    setShowWarningBanner(
+      verificationRequested
+        ? verificationState === "failed" || (verificationState === "pending" && showLinkedAccountGate)
+        : showLinkedAccountGate,
+    );
+  }, [
+    backendSyncStatus,
+    hasBackendRecognizedPlan,
+    linkedAndAuthenticated,
+    showLinkedAccountGate,
+    verificationRequested,
+    verificationState,
+  ]);
 
   useEffect(() => {
     if (!verificationRequested) {
@@ -294,23 +367,29 @@ export default function BillingPage() {
       return;
     }
 
-    if (backendSyncStatus === "success") {
+    if (!hasLinkedCompany || !hasAuthenticatedIframeSession) {
+      setVerificationState("pending");
+      setVerificationMessage("Your Shopify billing exists, but there is no active Clipwise iframe login for this store.");
+      return;
+    }
+
+    if (backendSyncStatus === "success" || hasBackendRecognizedPlan) {
       setVerificationState("success");
       setVerificationMessage("Your Shopify subscription is active and synced successfully.");
     } else {
       setVerificationState("checking");
       setVerificationMessage("We are verifying your Shopify subscription and syncing access.");
     }
-  }, [backendSyncStatus, verificationRequested]);
+  }, [backendSyncStatus, hasAuthenticatedIframeSession, hasBackendRecognizedPlan, hasLinkedCompany, verificationRequested]);
 
   useEffect(() => {
-    if (!shouldClearQuery) return;
+    if (!shouldClearQuery || !hasLinkedCompany || !hasAuthenticatedIframeSession) return;
     navigate(`/app/billing?${baseQuery}`, { replace: true });
-  }, [baseQuery, navigate, shouldClearQuery]);
+  }, [baseQuery, hasAuthenticatedIframeSession, hasLinkedCompany, navigate, shouldClearQuery]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    if (!verificationRequested) return undefined;
+    if (!verificationRequested || !hasLinkedCompany || !hasAuthenticatedIframeSession) return undefined;
     if (verificationState === "success" || verificationState === "failed" || verificationState === "pending") {
       return undefined;
     }
@@ -386,7 +465,50 @@ export default function BillingPage() {
         timeoutRef.current = null;
       }
     };
-  }, [baseQuery, navigate, verificationRequested, verificationState]);
+  }, [baseQuery, hasAuthenticatedIframeSession, hasLinkedCompany, navigate, verificationRequested, verificationState]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const syncAuthState = () => {
+      try {
+        const raw = window.sessionStorage.getItem(SHOPIFY_IFRAME_AUTH_STATE_STORAGE_KEY);
+        console.log("[shopify-auth-debug][billing] sync auth-state read", { raw });
+        if (!raw) {
+          setHasAuthenticatedIframeSession(false);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        setHasAuthenticatedIframeSession(Boolean(parsed?.isAuthenticated));
+      } catch {
+        setHasAuthenticatedIframeSession(false);
+      }
+    };
+
+    syncAuthState();
+    window.addEventListener("focus", syncAuthState);
+    return () => window.removeEventListener("focus", syncAuthState);
+  }, []);
+
+  useEffect(() => {
+    console.log("[shopify-auth-debug][billing] derived gating state", {
+      hasLinkedCompany,
+      hasAuthenticatedIframeSession,
+      companyId,
+      currentPlanKey,
+      backendSyncStatus,
+      verificationRequested,
+      showLinkedAccountGate,
+    });
+  }, [
+    backendSyncStatus,
+    companyId,
+    currentPlanKey,
+    hasAuthenticatedIframeSession,
+    hasLinkedCompany,
+    showLinkedAccountGate,
+    verificationRequested,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -399,8 +521,8 @@ export default function BillingPage() {
   }, []);
 
   useEffect(() => {
-    setBillingCycle(currentPlanCycle || "monthly");
-  }, [currentPlanCycle]);
+    setBillingCycle(displayCurrentPlanCycle || currentPlanCycle || "monthly");
+  }, [currentPlanCycle, displayCurrentPlanCycle]);
 
   const activePlanKeys =
     billingCycle === "yearly"
@@ -429,7 +551,11 @@ export default function BillingPage() {
   const planCards = activePlanKeys.map((planKey, index) => {
     const plan = billingPlans[planKey];
     const backendPlan = findBackendPlanForKey(planKey, plan);
-    const isCurrent = currentPlanKey === planKey;
+    const isCurrent =
+      hasLinkedCompany &&
+      hasAuthenticatedIframeSession &&
+      displayCurrentPlanKey === planKey &&
+      Boolean(backendSubscription || currentPlan);
     const isPopular = backendPlan
       ? normalizePlanKey(backendPlan.name) === recommendedPlan
       : index === 1;
@@ -461,6 +587,7 @@ export default function BillingPage() {
       features: backendPlan ? buildFeaturesForPlan(backendPlan) : plan.features,
       isCurrent,
       isPopular,
+      isLocked: showLinkedAccountGate,
       subscribeHref: `/app/billing/request?plan=${encodeURIComponent(planKey)}&${subscribeQuery}`,
     };
   });
@@ -484,10 +611,53 @@ export default function BillingPage() {
         marginTop: 56,
       };
 
+  const renderNotice = ({ tone, title, message, action }) => {
+    const palette =
+      tone === "success"
+        ? {
+            border: "#86EFAC",
+            background: "#ECFDF3",
+            title: "#166534",
+            text: "#166534",
+          }
+        : tone === "info"
+          ? {
+              border: "#93C5FD",
+              background: "#EFF6FF",
+              title: "#1D4ED8",
+              text: "#1E3A8A",
+            }
+          : {
+              border: "#FCD34D",
+              background: "#FFFBEB",
+              title: "#92400E",
+              text: "#78350F",
+            };
+
+    return (
+      <div
+        style={{
+          margin: "0 0 16px",
+          border: `1px solid ${palette.border}`,
+          background: palette.background,
+          borderRadius: 16,
+          padding: "16px 18px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: palette.title, marginBottom: 6 }}>{title}</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5, color: palette.text }}>{message}</div>
+          </div>
+          {action || null}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <Page
       fullWidth
-      title="Billing"
       backAction={{ content: "Home", onAction: () => navigate(`/app?${baseQuery}`) }}
     >
       <div
@@ -495,36 +665,140 @@ export default function BillingPage() {
           minHeight: "calc(100dvh - 56px)",
           background: "#F5F5F7",
           margin: "-16px",
-          padding: "24px 0 0",
+          padding: "24px 24px 40px",
         }}
       >
-        <div style={{ width: "100%", margin: 0 }}>
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 1320,
+            margin: "0 auto",
+          }}
+        >
+        <section
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            marginBottom: 20,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 28,
+              lineHeight: 1.1,
+              fontWeight: 700,
+              color: "#111827",
+            }}
+          >
+            Billing
+          </div>
+          {currentPlan && !showLinkedAccountGate ? (
+            <a
+              href={`/app/billing?cancel=1&${subscribeQuery}`}
+              style={{ textDecoration: "none" }}
+            >
+              <button
+                type="button"
+                style={{
+                  height: 42,
+                  borderRadius: 999,
+                  border: "1px solid #FCA5A5",
+                  background: "#FEF2F2",
+                  color: "#B91C1C",
+                  padding: "0 16px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Cancel current plan
+              </button>
+            </a>
+          ) : null}
+        </section>
         {verificationRequested && verificationState === "checking" ? (
-          <Banner title="Verifying subscription" tone="info">
-            <p>{verificationMessage}</p>
-          </Banner>
+          renderNotice({
+            tone: "info",
+            title: "Verifying subscription",
+            message: verificationMessage,
+          })
         ) : null}
         {showSuccessBanner ? (
-          <Banner
-            title="Subscription activated"
-            tone="success"
-            onDismiss={() => setShowSuccessBanner(false)}
-          >
-            <p>Your subscription is active and synced successfully.</p>
-          </Banner>
+          renderNotice({
+            tone: "success",
+            title: "Subscription activated",
+            message: "Your subscription is active and synced successfully.",
+            action: (
+              <button
+                type="button"
+                onClick={() => setShowSuccessBanner(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#166534",
+                  fontSize: 20,
+                  lineHeight: 1,
+                  cursor: "pointer",
+                }}
+                aria-label="Dismiss success notice"
+              >
+                ×
+              </button>
+            ),
+          })
         ) : null}
         {showWarningBanner ? (
-          <Banner
-            title={
-              verificationState === "failed"
+          renderNotice({
+            tone: "warning",
+            title: showLinkedAccountGate
+              ? "Clipwise account not linked"
+              : verificationState === "failed"
                 ? "Subscription verification failed"
-                : "Subscription verification pending"
-            }
-            tone="warning"
-            onDismiss={() => setShowWarningBanner(false)}
-          >
-            <p>{verificationMessage || "The Shopify plan became active, but backend sync did not complete cleanly."}</p>
-          </Banner>
+                : "Subscription verification pending",
+            message: verificationMessage || "The Shopify plan became active, but backend sync did not complete cleanly.",
+            action: (
+              <div style={{ display: "flex", alignItems: "start", gap: 8 }}>
+                {showLinkedAccountGate ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/app?${baseQuery}`)}
+                    style={{
+                      height: 40,
+                      borderRadius: 999,
+                      border: "1px solid #F59E0B",
+                      background: "#ffffff",
+                      color: "#92400E",
+                      padding: "0 16px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Go to app home
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setShowWarningBanner(false)}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#92400E",
+                    fontSize: 20,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                  }}
+                  aria-label="Dismiss warning notice"
+                >
+                  ×
+                </button>
+              </div>
+            ),
+          })
         ) : null}
         <section style={{ textAlign: "center", padding: "28px 0 20px" }}>
           <h1
@@ -766,6 +1040,24 @@ export default function BillingPage() {
                       >
                         Current Plan
                       </button>
+                    ) : plan.isLocked ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/app?${baseQuery}`)}
+                        style={{
+                          width: "100%",
+                          height: 48,
+                          borderRadius: 999,
+                          border: "2px solid #F59E0B",
+                          background: "#FFF7ED",
+                          color: "#B45309",
+                          fontSize: 16,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Login to continue
+                      </button>
                     ) : (
                       <a href={plan.subscribeHref} style={{ display: "block", width: "100%", textDecoration: "none" }}>
                         <button
@@ -938,24 +1230,6 @@ export default function BillingPage() {
           </div>
         </section>
 
-        {currentPlan ? (
-          <section
-            style={{
-              marginTop: 12,
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
-            <a
-              href={`/app/billing?cancel=1&${subscribeQuery}`}
-              style={{ display: "inline-block", textDecoration: "none" }}
-            >
-              <Button destructive>
-                Cancel current plan
-              </Button>
-            </a>
-          </section>
-        ) : null}
         </div>
       </div>
     </Page>

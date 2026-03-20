@@ -4,6 +4,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import "@shopify/polaris/build/esm/styles.css";
 import { getStoredCompanyId } from "../company-id.server";
+import { createStoredShopCookie } from "../shop-cookie.server";
 import { getLinkedCompanyIdForShop } from "../shop-link.server";
 import { authenticate } from "../shopify.server";
 
@@ -16,7 +17,14 @@ export const loader = async ({ request }) => {
     (await getLinkedCompanyIdForShop(session.shop));
 
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "", companyId };
+  return Response.json(
+    { apiKey: process.env.SHOPIFY_API_KEY || "", companyId },
+    {
+      headers: {
+        "Set-Cookie": createStoredShopCookie(session.shop),
+      },
+    },
+  );
 };
 
 export default function App() {
