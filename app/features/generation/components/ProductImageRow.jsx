@@ -1,5 +1,4 @@
 /* eslint-disable react/prop-types */
-import { Text } from "@shopify/polaris";
 import { colors } from "../styles";
 
 export function ProductImageRow({ product, bridge }) {

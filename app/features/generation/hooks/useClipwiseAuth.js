@@ -3,24 +3,19 @@ import { signInWithPopup } from "firebase/auth";
 import { assertFirebaseConfigured, auth, googleProvider } from "../../../config/firebase.client";
 import { CLIPWISE_ENDPOINTS } from "../constants";
 import {
-  clearStoredClipwiseAuth,
   clipwiseRequest,
   fetchClipwiseUserContext,
-  normalizeAuthPayload,
   refreshClipwiseAuth,
   storeClipwiseAuth,
 } from "../services/clipwise-auth.client";
-
-function readStoredClipwiseAuth() {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const raw = window.localStorage.getItem("clipwise-shopify-auth");
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
+import {
+  applyNormalizedClipwiseAuth,
+  clearDisconnectedClipwiseAuth,
+  enrichAuthPayloadWithUserContext,
+  readStoredClipwiseAuth,
+  refreshStoredClipwiseAuth,
+  restoreStoredClipwiseAuth,
+} from "./clipwiseAuthHelpers";
 
 export function useClipwiseAuth() {
   const [authMode, setAuthMode] = useState("login");
@@ -67,70 +62,24 @@ export function useClipwiseAuth() {
       }
 
       try {
-        const userContext = await fetchClipwiseUserContext(stored.accessToken);
+        const nextAuth = await restoreStoredClipwiseAuth(stored);
         if (!active) return;
-
-        const enrichedUser = userContext?.user ? {
-          ...userContext.user,
-          total_credits_remaining: userContext.total_credits_remaining,
-        } : (stored.user || null);
-
-        setClipwiseAuth({
-          status: "connected",
-          accessToken: stored.accessToken,
-          refreshToken: stored.refreshToken || "",
-          user: enrichedUser,
-        });
-        storeClipwiseAuth({
-          accessToken: stored.accessToken,
-          refreshToken: stored.refreshToken || "",
-          user: enrichedUser,
-        });
+        setClipwiseAuth(nextAuth);
       } catch {
         if (!stored.refreshToken) {
-          clearStoredClipwiseAuth();
           if (active) {
-            setClipwiseAuth({
-              status: "disconnected",
-              accessToken: "",
-              refreshToken: "",
-              user: null,
-            });
+            clearDisconnectedClipwiseAuth(setClipwiseAuth);
           }
           return;
         }
 
         try {
-          const refreshed = await refreshClipwiseAuth(stored.refreshToken);
-          const userContext = await fetchClipwiseUserContext(refreshed.accessToken);
+          const nextAuth = await refreshStoredClipwiseAuth(stored);
           if (!active) return;
-
-          const enrichedUser = userContext?.user ? {
-            ...userContext.user,
-            total_credits_remaining: userContext.total_credits_remaining,
-          } : (stored.user || null);
-
-          const nextAuth = {
-            status: "connected",
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken,
-            user: enrichedUser,
-          };
           setClipwiseAuth(nextAuth);
-          storeClipwiseAuth({
-            accessToken: nextAuth.accessToken,
-            refreshToken: nextAuth.refreshToken,
-            user: nextAuth.user,
-          });
         } catch {
-          clearStoredClipwiseAuth();
           if (active) {
-            setClipwiseAuth({
-              status: "disconnected",
-              accessToken: "",
-              refreshToken: "",
-              user: null,
-            });
+            clearDisconnectedClipwiseAuth(setClipwiseAuth);
           }
         }
       }
@@ -141,22 +90,6 @@ export function useClipwiseAuth() {
       active = false;
     };
   }, []);
-
-  const applyClipwiseAuth = (payload) => {
-    const normalized = normalizeAuthPayload(payload);
-    const nextAuth = {
-      status: "connected",
-      accessToken: normalized.accessToken,
-      refreshToken: normalized.refreshToken,
-      user: normalized.user,
-    };
-
-    setClipwiseAuth(nextAuth);
-    storeClipwiseAuth(nextAuth);
-    setAuthAction({ loading: false, googleLoading: false, error: null });
-    setAuthForm((prev) => ({ ...prev, password: "", password2: "" }));
-  };
-
   const connectClipwise = async () => {
     setAuthAction((prev) => ({ ...prev, loading: true, error: null }));
 
@@ -180,23 +113,8 @@ export function useClipwiseAuth() {
         body: JSON.stringify(payload),
       });
 
-      // Fetch user context to get credits and remaining data immediately
-      const token = authPayload?.access || authPayload?.accessToken;
-      if (token) {
-        try {
-          const userContext = await fetchClipwiseUserContext(token);
-          if (userContext?.user) {
-            authPayload.user = {
-              ...userContext.user,
-              total_credits_remaining: userContext.total_credits_remaining,
-            };
-          }
-        } catch (e) {
-          console.error("Failed to fetch user context immediately after login:", e);
-        }
-      }
-
-      applyClipwiseAuth(authPayload);
+      const enrichedPayload = await enrichAuthPayloadWithUserContext(authPayload, "login");
+      applyNormalizedClipwiseAuth(enrichedPayload, setClipwiseAuth, setAuthAction, setAuthForm);
     } catch (error) {
       setAuthAction({
         loading: false,
@@ -229,23 +147,8 @@ export function useClipwiseAuth() {
         body: JSON.stringify({ id_token: idToken }),
       });
 
-      // Fetch user context to get credits and remaining data immediately
-      const token = authPayload?.access || authPayload?.accessToken;
-      if (token) {
-        try {
-          const userContext = await fetchClipwiseUserContext(token);
-          if (userContext?.user) {
-            authPayload.user = {
-              ...userContext.user,
-              total_credits_remaining: userContext.total_credits_remaining,
-            };
-          }
-        } catch (e) {
-          console.error("Failed to fetch user context immediately after google auth:", e);
-        }
-      }
-
-      applyClipwiseAuth(authPayload);
+      const enrichedPayload = await enrichAuthPayloadWithUserContext(authPayload, "google auth");
+      applyNormalizedClipwiseAuth(enrichedPayload, setClipwiseAuth, setAuthAction, setAuthForm);
     } catch (error) {
       let errorMessage = "Google sign-in failed";
 
@@ -287,13 +190,7 @@ export function useClipwiseAuth() {
       }
     }
 
-    clearStoredClipwiseAuth();
-    setClipwiseAuth({
-      status: "disconnected",
-      accessToken: "",
-      refreshToken: "",
-      user: null,
-    });
+    clearDisconnectedClipwiseAuth(setClipwiseAuth);
   };
 
   const getFreshAccessToken = async () => {

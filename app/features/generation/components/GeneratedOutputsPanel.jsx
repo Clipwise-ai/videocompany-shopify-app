@@ -1,4 +1,5 @@
 /* eslint-disable react/prop-types */
+/* eslint-disable jsx-a11y/media-has-caption */
 import { Text } from "@shopify/polaris";
 
 function PendingCard({ item }) {
@@ -80,7 +81,7 @@ function MediaCard({ item }) {
   );
 }
 
-export function GeneratedOutputsPanel({ outputs, bridgeStatus }) {
+export function GeneratedOutputsPanel({ outputs }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{

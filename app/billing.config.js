@@ -8,6 +8,7 @@ export const STARTER_YEARLY_PLAN = "starter_yearly";
 export const CREATOR_YEARLY_PLAN = "creator_yearly";
 
 function parsePlanAmount(envKey, testFallbackAmount) {
+  // eslint-disable-next-line no-undef
   const raw = process.env[envKey];
 
   if (raw != null && raw !== "") {
@@ -28,6 +29,7 @@ function parsePlanAmount(envKey, testFallbackAmount) {
 }
 
 function parseOptionalAmount(envKey, fallbackAmount) {
+  // eslint-disable-next-line no-undef
   const raw = process.env[envKey];
   if (raw == null || raw === "") {
     return fallbackAmount;

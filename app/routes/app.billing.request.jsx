@@ -1,6 +1,6 @@
 import { redirect } from "react-router";
 import { createPendingBillingAttemptCookie } from "../billing-attempt.server";
-import { buildEmbeddedAdminAppUrl, getPublicAppUrl } from "../app-url.server";
+import { getPublicAppUrl } from "../app-url.server";
 import { SHOPIFY_BILLING_TEST_MODE } from "../billing-mode.server";
 import { SHOPIFY_BILLING_PLANS, SHOPIFY_PAID_PLAN_KEYS } from "../billing.config.server";
 import { getStoredCompanyId } from "../company-id.server";
@@ -12,8 +12,6 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const params = new URLSearchParams(url.searchParams);
   const planKey = String(params.get("plan") || "").trim();
-  const host = String(params.get("host") || "").trim();
-  const embedded = params.get("embedded") === "1";
   const companyId =
     String(params.get("companyId") || "").trim() ||
     getStoredCompanyId(request) ||
@@ -38,7 +36,6 @@ export const loader = async ({ request }) => {
     returnParams.set("plan", planKey);
   }
   const publicAppUrl = getPublicAppUrl(request);
-  const embeddedAppBaseUrl = buildEmbeddedAdminAppUrl(host);
   const returnUrlBase = publicAppUrl;
   const returnUrlPath = `/app/billing?${returnParams.toString()}`;
   const returnUrl = new URL(

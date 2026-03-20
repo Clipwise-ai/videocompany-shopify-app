@@ -22,6 +22,7 @@ export const loader = async ({ request }) => {
 
   // eslint-disable-next-line no-undef
   return Response.json(
+    // eslint-disable-next-line no-undef
     { apiKey: process.env.SHOPIFY_API_KEY || "", companyId },
     {
       headers: {

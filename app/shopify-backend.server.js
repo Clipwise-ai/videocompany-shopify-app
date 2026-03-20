@@ -1,171 +1,19 @@
-import crypto from "node:crypto";
-import { SHOPIFY_BILLING_PLANS } from "./billing.config.server";
+import { sendSignedRequest } from "./lib/shopify-backend/core.server";
+import {
+  fetchActiveAppSubscriptions,
+  fetchShopIdentity,
+} from "./lib/shopify-backend/shopify-admin.server";
+import {
+  normalizeBillingStatus,
+  normalizeShopPayload,
+  resolveAmount,
+  resolveCurrency,
+  resolveInterval,
+  resolvePlanKey,
+  resolveShopifyCustomerId,
+} from "./lib/shopify-backend/subscription-payload.server";
 
-const DJANGO_BACKEND_URL = process.env.DJANGO_BACKEND_URL || "";
-const SHOPIFY_INTERNAL_SYNC_SECRET = process.env.SHOPIFY_INTERNAL_SYNC_SECRET || "";
-const SHOP_QUERY = `#graphql
-  query ShopIdentity {
-    shop {
-      id
-      name
-      email
-      myshopifyDomain
-    }
-  }
-`;
-
-const ACTIVE_APP_SUBSCRIPTIONS_QUERY = `#graphql
-  query ActiveAppSubscriptions {
-    currentAppInstallation {
-      activeSubscriptions {
-        id
-        name
-        status
-        test
-        createdAt
-        currentPeriodEnd
-        lineItems {
-          id
-          plan {
-            pricingDetails {
-              __typename
-              ... on AppRecurringPricing {
-                interval
-                price {
-                  amount
-                  currencyCode
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-async function parseJson(response) {
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
-
-function getSyncHeaders(path, body) {
-  if (!SHOPIFY_INTERNAL_SYNC_SECRET) {
-    throw new Error("SHOPIFY_INTERNAL_SYNC_SECRET is not configured.");
-  }
-
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature = crypto
-    .createHmac("sha256", SHOPIFY_INTERNAL_SYNC_SECRET)
-    .update(`${timestamp}.${path}.${body}`)
-    .digest("hex");
-
-  return {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    "X-Clipwise-Timestamp": timestamp,
-    "X-Clipwise-Signature": `sha256=${signature}`,
-  };
-}
-
-async function sendSignedRequest(path, payload, { method = "POST" } = {}) {
-  if (!DJANGO_BACKEND_URL) {
-    throw new Error("DJANGO_BACKEND_URL is not configured.");
-  }
-  const trimmedBase = DJANGO_BACKEND_URL.replace(/\/$/, "");
-  const body = payload ? JSON.stringify(payload) : "";
-  const response = await fetch(`${trimmedBase}${path}`, {
-    method,
-    headers: getSyncHeaders(path, body),
-    body: method === "GET" ? undefined : body,
-  });
-  const responsePayload = await parseJson(response);
-  if (!response.ok) {
-    const error = new Error(responsePayload?.error || `Backend sync failed (${response.status})`);
-    error.status = response.status;
-    error.payload = responsePayload;
-    throw error;
-  }
-  return responsePayload;
-}
-
-export async function fetchShopIdentity(admin) {
-  const response = await admin.graphql(SHOP_QUERY);
-  const payload = await response.json();
-  return payload?.data?.shop || null;
-}
-
-export async function fetchActiveAppSubscriptions(admin) {
-  const response = await admin.graphql(ACTIVE_APP_SUBSCRIPTIONS_QUERY);
-  const payload = await response.json();
-  return payload?.data?.currentAppInstallation?.activeSubscriptions || [];
-}
-
-function normalizeShopPayload(shop) {
-  return {
-    domain: shop?.myshopifyDomain || "",
-    shop_id: shop?.id || "",
-    email: shop?.email || "",
-    name: shop?.name || "",
-  };
-}
-
-function resolveShopifyCustomerId(shop) {
-  return String(shop?.myshopifyDomain || shop?.domain || "")
-    .trim()
-    .toLowerCase() || null;
-}
-
-function normalizeBillingStatus(status) {
-  return String(status || "").toUpperCase() || "PENDING";
-}
-
-function resolvePlanKey(appSubscription) {
-  const subscriptionName = String(appSubscription?.name || "").trim().toLowerCase();
-  const interval = String(appSubscription?.lineItems?.[0]?.plan?.pricingDetails?.interval || "").toUpperCase();
-  const cycle = interval.includes("ANNUAL") ? "yearly" : "monthly";
-  const matchingEntry = Object.entries(SHOPIFY_BILLING_PLANS).find(([, plan]) => {
-    const planCycle = String(plan.interval || "").toUpperCase().includes("ANNUAL")
-      ? "yearly"
-      : "monthly";
-    return (
-      (planCycle === cycle && plan.label.toLowerCase() === subscriptionName) ||
-      plan.backendPlanKey.toLowerCase() === subscriptionName
-    );
-  });
-  if (matchingEntry) {
-    return matchingEntry[1].backendPlanKey;
-  }
-
-  const appSubscriptionId = String(appSubscription?.id || "");
-  const matchingById = Object.entries(SHOPIFY_BILLING_PLANS).find(([planKey]) => appSubscriptionId.includes(planKey));
-  if (matchingById) {
-    return matchingById[1].backendPlanKey;
-  }
-
-  throw new Error(`Could not resolve backend Shopify plan key for subscription '${appSubscription?.name || ""}'.`);
-}
-
-function resolveAmount(appSubscription) {
-  const lineItems = Array.isArray(appSubscription?.lineItems) ? appSubscription.lineItems : [];
-  const amount = lineItems[0]?.plan?.pricingDetails?.price?.amount;
-  return amount || null;
-}
-
-function resolveCurrency(appSubscription) {
-  const lineItems = Array.isArray(appSubscription?.lineItems) ? appSubscription.lineItems : [];
-  return lineItems[0]?.plan?.pricingDetails?.price?.currencyCode || "USD";
-}
-
-function resolveInterval(appSubscription) {
-  const lineItems = Array.isArray(appSubscription?.lineItems) ? appSubscription.lineItems : [];
-  return lineItems[0]?.plan?.pricingDetails?.interval || "EVERY_30_DAYS";
-}
+export { fetchActiveAppSubscriptions, fetchShopIdentity };
 
 export async function syncShopifySubscription({
   admin,
@@ -254,7 +102,10 @@ export async function fetchShopifyPricingCatalog() {
   });
 }
 
-export async function fetchShopifySubscriptionStatus({ companyId = null, customerId = "" } = {}) {
+export async function fetchShopifySubscriptionStatus({
+  companyId = null,
+  customerId = "",
+} = {}) {
   const params = new URLSearchParams();
   if (companyId) {
     params.set("company_id", companyId);
